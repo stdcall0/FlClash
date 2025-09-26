@@ -2,56 +2,23 @@ name: build
 
 on:
   push:
-    tags:
-      - 'v*'
-env:
-  IS_STABLE: ${{ !contains(github.ref, '-') }}
+    branches:
+        - main
+
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
-  # 自动取消其他运行中的workflow
   cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     env:
-      GITHUB_TOKEN: ${{secrets.ACTIONS_TOKEN}}
+      GITHUB_TOKEN: ${{ secrets.ACTIONS_TOKEN }}
     outputs:
       ver: ${{ steps.set-ver.outputs.version }}
       sver: ${{ steps.set-ver.outputs.sversion }}
-    strategy:
-      matrix:
-        include:
-          - platform: android
-            os: ubuntu-latest
-          - platform: windows
-            os: Windows-2022
-            arch: amd64
-          - platform: linux
-            os: ubuntu-22.04
-            arch: amd64
-          - platform: macos
-            os: macos-13
-            arch: amd64
-          - platform: macos
-            os: macos-latest
-            arch: arm64
-          - platform: windows
-            os: windows-11-arm
-            arch: arm64
-          - platform: linux
-            os: ubuntu-24.04-arm
-            arch: arm64
 
     steps:
-      - name: Setup rust
-        if: startsWith(matrix.os, 'windows-11-arm')
-        run: |
-          Invoke-WebRequest -Uri "https://win.rustup.rs/aarch64" -OutFile rustup-init.exe
-          .\rustup-init.exe -y --default-toolchain stable
-          $cargoPath = "$env:USERPROFILE\.cargo\bin"
-          Add-Content $env:GITHUB_PATH $cargoPath
-
       - name: Checkout
         uses: actions/checkout@v5
         with:
@@ -62,7 +29,6 @@ jobs:
           timezoneLinux: "Asia/Shanghai"
 
       - name: Setup Android Signing
-        if: startsWith(matrix.platform,'android')
         run: |
           cp $GITHUB_WORKSPACE/.github/workflows/flclash.jks $GITHUB_WORKSPACE/android/app/keystore.jks
           echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> android/local.properties
@@ -76,25 +42,17 @@ jobs:
           cache-dependency-path: |
             core/go.sum
 
-      - name: Setup Flutter Master
-        if: startsWith(matrix.os, 'windows-11-arm') || startsWith(matrix.os, 'ubuntu-24.04-arm')
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'master'
-          cache: true
       - name: Setup Flutter
-        if: ${{ !(startsWith(matrix.os, 'windows-11-arm') || startsWith(matrix.os, 'ubuntu-24.04-arm')) }}
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
-      #          flutter-version: 3.29.3
 
       - name: Get Flutter Dependency
         run: flutter pub get
 
       - name: Setup
-        run: dart setup.dart ${{ matrix.platform }} ${{ matrix.arch && format('--arch {0}', matrix.arch) }} ${{ env.IS_STABLE == 'true' && '--env stable' || '' }}
+        run: dart setup.dart android
 
       - id: set-ver
         shell: bash
@@ -107,79 +65,6 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: artifact-${{ matrix.platform }}${{ matrix.arch && format('-{0}', matrix.arch) }}
+          name: artifact-android
           path: ./dist
           overwrite: true
-
-  publish-release:
-    runs-on: ubuntu-latest
-    needs: [ build ]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        if: ${{ env.IS_STABLE == 'true' }}
-        with:
-          fetch-depth: 0
-          ref: refs/heads/main
-
-      - name: Download
-        uses: actions/download-artifact@v4
-        with:
-          path: ./dist/
-          pattern: artifact-*
-          merge-multiple: true
-
-      - name: Generate sha256
-        if: env.IS_STABLE == 'true'
-        run: |
-          cd ./dist
-          for file in $(find . -type f -not -name "*.sha256"); do
-            sha256sum "$file" > "${file}.sha256"
-          done
-
-      - name: Release Changelog Builder
-        id: changelog
-        uses: mikepenz/release-changelog-builder-action@v4
-        with:
-          configurationJson: |
-            {
-              "categories": [
-                {
-                  "title": "## 🚀 Features",
-                  "labels": ["feature", "enhancement"]
-                },
-                {
-                  "title": "## 🐛 Fixes",
-                  "labels": ["fix", "bug"]
-                },
-                {
-                  "title": "## 🧪 Tests",
-                  "labels": ["test"]
-                },
-                {
-                  "title": "## 📦 Other",
-                  "labels": []
-                }
-              ],
-              "template": "\n\n**Download based on your OS:**\n\n<div align=left>\n<table>\n    <thead align=left>\n        <tr>\n            <th>OS</th>\n            <th>Download</th>\n        </tr>\n    </thead>\n    <tbody align=left>\n        <tr>\n        <td>Android</td>\n            <td>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-android-arm64-v8a.apk\"><img src=\"https://img.shields.io/badge/APK-ARMv8-168039.svg?logo=android\"></a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-android-armeabi-v7a.apk\"><img src=\"https://img.shields.io/badge/APK-ARMv7-45bf55.svg?logo=android\"></a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-android-x86_64.apk\"><img src=\"https://img.shields.io/badge/APK-x64-96ed89.svg?logo=android\"></a>\n            </td>\n        </tr>\n        <tr>\n            <td>Windows</td>\n            <td>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-windows-amd64-setup.exe\"><img src=\"https://img.shields.io/badge/Setup-x64-2d7d9a.svg?logo=windows\"></a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-windows-amd64.zip\"><img src=\"https://img.shields.io/badge/Portable-x64-67b7d1.svg?logo=windows\"></a>\n            </td>\n        </tr>\n        <tr>\n            <td>macOS</td>\n            <td>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-macos-arm64.dmg\"><img src=\"https://img.shields.io/badge/DMG-Apple%20Silicon-%23000000.svg?logo=apple\"></a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-macos-amd64.dmg\"><img src=\"https://img.shields.io/badge/DMG-Intel%20X64-%2300A9E0.svg?logo=apple\"></a><br>\n            </td>\n        </tr>\n        <tr>\n            <td>Linux</td>\n            <td>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-linux-amd64.AppImage\"><img src=\"https://img.shields.io/badge/AppImage-x64-f84e29.svg?logo=linux\"> </a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-linux-amd64.deb\"><img src=\"https://img.shields.io/badge/DebPackage-x64-FF9966.svg?logo=debian\"> </a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-linux-amd64.deb\"><img src=\"https://img.shields.io/badge/RpmPackage-x64-F1B42F.svg?logo=redhat\"> </a>\n            </td>\n        </tr>\n    </tbody>\n</table>\n\n\n</div>#{{CHANGELOG}}\n\n<details>\n<summary>Uncategorized</summary>\n\n#{{UNCATEGORIZED}}\n</details>",
-              "pr_template": "- #{{TITLE}}\n   - PR: ##{{NUMBER}}",
-              "empty_template": "\n\n**Download based on your OS:**\n\n<div align=left>\n<table>\n    <thead align=left>\n        <tr>\n            <th>OS</th>\n            <th>Download</th>\n        </tr>\n    </thead>\n    <tbody align=left>\n        <tr>\n        <td>Android</td>\n            <td>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-android-arm64-v8a.apk\"><img src=\"https://img.shields.io/badge/APK-ARMv8-168039.svg?logo=android\"></a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-android-armeabi-v7a.apk\"><img src=\"https://img.shields.io/badge/APK-ARMv7-45bf55.svg?logo=android\"></a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-android-x86_64.apk\"><img src=\"https://img.shields.io/badge/APK-x64-96ed89.svg?logo=android\"></a>\n            </td>\n        </tr>\n        <tr>\n            <td>Windows</td>\n            <td>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-windows-amd64-setup.exe\"><img src=\"https://img.shields.io/badge/Setup-x64-2d7d9a.svg?logo=windows\"></a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-windows-amd64.zip\"><img src=\"https://img.shields.io/badge/Portable-x64-67b7d1.svg?logo=windows\"></a>\n            </td>\n        </tr>\n        <tr>\n            <td>macOS</td>\n            <td>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-macos-arm64.dmg\"><img src=\"https://img.shields.io/badge/DMG-Apple%20Silicon-%23000000.svg?logo=apple\"></a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-macos-amd64.dmg\"><img src=\"https://img.shields.io/badge/DMG-Intel%20X64-%2300A9E0.svg?logo=apple\"></a><br>\n            </td>\n        </tr>\n        <tr>\n            <td>Linux</td>\n            <td>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-linux-amd64.AppImage\"><img src=\"https://img.shields.io/badge/AppImage-x64-f84e29.svg?logo=linux\"> </a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-linux-amd64.deb\"><img src=\"https://img.shields.io/badge/DebPackage-x64-FF9966.svg?logo=debian\"> </a><br>\n                <a href=\"https://github.com/LM-Firefly/FlClash/releases/download/${{ needs.build.outputs.ver }}/FlClash-${{ needs.build.outputs.sver }}-linux-amd64.deb\"><img src=\"https://img.shields.io/badge/RpmPackage-x64-F1B42F.svg?logo=redhat\"> </a>\n            </td>\n        </tr>\n    </tbody>\n</table>\n\n\n</div> - No changes"
-            }
-          failOnError: false
-          fromTag: "v0.0.0"
-          toTag: "v0.0.0"
-          commitMode: true
-
-      - name: Release
-        if: ${{ env.IS_STABLE == 'true' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          name: FlClash ${{ steps.set-ver.outputs.version }}
-          files: ./dist/*
-          tag_name: '${{ needs.build.outputs.ver }}'
-          token: ${{secrets.ACTIONS_TOKEN}}
-          body: |
-            ${{ steps.changelog.outputs.changelog }}
-          append_body: true
-          generate_release_notes: true
-          prerelease: false
